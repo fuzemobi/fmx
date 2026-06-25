@@ -107,5 +107,19 @@ def schema_cmd(
     print(json.dumps(result, indent=2))
 
 
+@app.command(name="mcp")
+def mcp_cmd() -> None:
+    """Run an MCP server over stdio exposing respond/respond_schema/build_schema as tools."""
+    try:
+        from .mcp_server import mcp as server
+    except ModuleNotFoundError as exc:
+        _err.print(
+            "[bold red]The 'mcp' package isn't installed.[/] "
+            "Install it with: [cyan]uv pip install 'fmx[mcp]'[/]."
+        )
+        raise typer.Exit(1) from exc
+    server.run()  # FastMCP defaults to stdio transport
+
+
 if __name__ == "__main__":
     app()

@@ -25,7 +25,8 @@ jobs:
         run: uvx ruff check .
 
       - name: Unit tests (SDK-free; CLI/model tests self-skip)
-        run: uv run --no-project --isolated --with pytest pytest tests -v
+        # --with mcp so the SDK-free MCP tests run; require_model ones still skip.
+        run: uv run --no-project --isolated --with pytest --with mcp pytest tests -v
         env:
           PYTHONPATH: src
 
