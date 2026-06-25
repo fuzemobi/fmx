@@ -30,6 +30,11 @@ dependencies = [
     "rich>=13",
 ]
 
+[project.optional-dependencies]
+# `fmx mcp` — expose the on-device model as MCP tools. Optional so the base
+# CLI stays dependency-light; install with `uv pip install 'fmx[mcp]'`.
+mcp = ["mcp>=1.2"]
+
 [project.urls]
 Homepage = "https://github.com/manjunathshiva/fmx"
 Issues = "https://github.com/manjunathshiva/fmx/issues"
@@ -38,7 +43,8 @@ Issues = "https://github.com/manjunathshiva/fmx/issues"
 fmx = "fmx.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+# mcp is in dev so `uv sync` + `uv run pytest` exercise the MCP server locally.
+dev = ["pytest>=8", "ruff>=0.6", "mcp>=1.2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fmx"]
