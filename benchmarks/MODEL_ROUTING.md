@@ -27,18 +27,56 @@ benchmarks in this folder (see `FINDINGS.md`).
 | Anything private/offline/zero-cost | **fmx** (small) or **qwen3-coder** (capable) | size to the task; qwen for code/reasoning, fmx for short transforms. |
 | Long document (> a few k tokens) | **gpt-oss-120b / glm** | fmx's ~4k context can't hold it; raise Ollama `num_ctx` if going local. |
 
-## Using the MCP servers for the right purpose
+## The `generate` router tool (preferred) — one tool, all backends, mode-gated
 
-- **`fmx` MCP (`respond`, `respond_schema`, `build_schema`)** — delegate *narrow* generation
-  to the on-device model: short summaries, a rename, a JSON extraction, a quick estimate. Keep
-  the hard reasoning and orchestration in the calling agent. Don't hand it code or long context.
-- **`cerebras-code` MCP (`write`)** — a **code-only** tool. It ignores prose instructions and
-  emits code. Use it for file generation/edits; for summaries/prose call the **Cerebras API**
-  directly (or route prose to fmx/gpt-oss via another path). It's pinned to one model at launch
-  (`CEREBRAS_MODEL`, default `gpt-oss-120b`); to switch models use the API.
-- **`ollama` MCP** (configured in some project roots, via `uvx mcp-ollama`) — good for
-  interactive local calls. For *benchmarking or long inputs*, prefer the Ollama HTTP API so you
-  control `num_ctx` and get clean timing.
+The `fmx` MCP server (`fmx mcp`) exposes a **`generate`** tool that encodes this whole
+document as code. Call it instead of hand-routing:
+
+```
+generate(prompt, mode, model=None, backend=None, max_tokens=None)
+mode ∈ {reasoning, summarization, code, extract}   # required
+```
+
+- **Backends:** fmx (on-device), Cerebras (gpt-oss-120b / zai-glm-4.7 via the OpenAI-compatible
+  API at `https://api.cerebras.ai/v1`), Ollama (native `/api/chat`, `num_ctx` raised), and any
+  other OpenAI-compatible endpoint via `FMX_OPENAI_BASE_URL` / `FMX_OPENAI_MODELS`.
+- **Mode picks + validates the backend.** Defaults: code/reason/summarize → `gpt-oss-120b`,
+  extract → `fmx`. The router **denies** unsupported (mode, model) pairs with a cited reason —
+  e.g. `generate(mode="code", model="fmx")` → refused, "fmx fails at code… use gpt-oss-120b".
+- **Discipline is baked in:** fence-stripping, anti-invention rule for summaries, an output cap
+  for reasoning (and a forced cap on `zai-glm-4.7`, which runs away uncapped). Usage + cost are
+  logged to stderr every call.
+- **Context fitting, no lost context:** over-window `summarization` is **map-reduced**
+  (chunk → summarize → reduce); over-window `reasoning`/`code` is **refused with an escalation
+  suggestion** rather than truncated. `list_capabilities` returns the full matrix + availability.
+
+The on-device-only tools (`respond`, `respond_schema`, `build_schema`) remain for direct fmx use.
+The third-party **`cerebras-code` npm MCP is retired** — its single-tool, code-forcing wrapper is
+exactly the bug FINDINGS.md caught (it can't summarize); use `generate(mode="code")` instead.
+
+### Token discipline — three layers (RTK → headroom → generate)
+
+These three don't call each other; they cover different stages of the token pipeline. None is a
+substitute for another — `generate` fits what you *send*, the other two manage what you *hold*.
+
+| Layer | Stage | Covers | How | Effort |
+|-------|-------|--------|-----|--------|
+| **RTK** | **inbound** — output entering your context | `git` / `pytest` / `grep` / `ls` / build logs | CLI filter, auto via Bash hook | automatic, $0, lossless-of-signal |
+| **headroom** | **held** — arbitrary text already in your window | file Reads, API/MCP results, model outputs | MCP stash + `retrieve(hash)` | manual, **lossy**, fallback |
+| **`generate` window-fitting** | **outbound** — prompt → backend model | fmx ~4k / cloud 128k / ollama `num_ctx` | `router.py` map-reduce / escalate | automatic |
+
+```
+shell commands ──RTK filters at source──► your context ──headroom (non-command blobs only)──► generate(...) ──► backend
+                 (less junk ever enters)                 (lossy stash, last resort)            (fits to window)
+```
+
+**Lead with RTK** (`rtk init -g` — not installed yet). It's automatic and hits the biggest bloat
+source — command output — losslessly. Reach for **headroom** only for arbitrary text RTK can't see
+(a big `Read`, a non-command MCP result, a `generate` output), and prefer *not holding it* (`Grep`
+over `Read`, `generate(mode="summarization")`) over its lossy stash. Neither touches `generate`:
+a *backend* model can't call `headroom_retrieve` mid-generation, which is exactly why compression
+stays agent-side — `generate` handles "input too big for this backend" itself (map-reduce /
+escalate), never silent truncation.
 
 ## Token discipline
 - **glm-4.7 must be token-capped.** Uncapped it over-reasons, costs up to ~$0.04 for a handful
